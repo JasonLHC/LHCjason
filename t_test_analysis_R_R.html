@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Gene Expression T-Test Analysis</title>
+    <!-- XLSX Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .step {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .step-header {
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+        .columns-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-top: 10px;
+        }
+        .column-list {
+            border: 1px solid #ddd;
+            padding: 10px;
+            min-height: 200px;
+            overflow-y: auto;
+        }
+        .column-item {
+            padding: 5px;
+            margin: 2px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        .column-item:hover {
+            background-color: #e9ecef;
+        }
+        .column-item.selected {
+            background-color: #007bff;
+            color: white;
+        }
+        .search-box {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #fileInput {
+            margin-bottom: 15px;
+        }
+        .hidden {
+            display: none;
+        }
+        #geneList {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Gene Expression T-Test Analysis</h1>
+
+        <!-- Step 1: File Upload -->
+        <div class="step" id="step1">
+            <h2 class="step-header">Step 1: Upload Excel File</h2>
+            <input type="file" id="fileInput" accept=".xlsx,.xls" />
+        </div>
+
+        <!-- Step 2: Group Selection -->
+        <div class="step hidden" id="step2">
+            <h2 class="step-header">Step 2: Select Groups</h2>
+            <div class="columns-container">
+                <div>
+                    <h3>Group 1</h3>
+                    <div id="group1List" class="column-list"></div>
+                </div>
+                <div>
+                    <h3>Group 2</h3>
+                    <div id="group2List" class="column-list"></div>
+                </div>
+            </div>
+            <button onclick="confirmGroups()">Confirm Groups</button>
+        </div>
+
+        <!-- Step 3: Gene Search -->
+        <div class="step hidden" id="step3">
+            <h2 class="step-header">Step 3: Search Gene</h2>
+            <input type="text" id="geneSearch" class="search-box" placeholder="Type at least 2 characters to search genes...">
+            <div id="geneList"></div>
+            <button onclick="confirmGene()">Confirm Gene</button>
+        </div>
+
+        <!-- Step 4: Test Selection -->
+        <div class="step hidden" id="step4">
+            <h2 class="step-header">Step 4: Select Test Type</h2>
+            <select id="testType" class="search-box">
+                <option value="paired">Paired T-Test</option>
+                <option value="unpaired">Unpaired T-Test</option>
+            </select>
+            <button onclick="performTTest()">Perform T-Test</button>
+        </div>
+
+        <!-- Results -->
+        <div id="results" class="results hidden">
+            <h2>Results</h2>
+            <div id="resultContent"></div>
+        </div>
+
+        <!-- A button to test the Groq API call -->
+        <button onclick="callGroqAPI()">Test Groq API</button>
+        <!-- (Optional) A div to show the Groq API response -->
+        <div id="groqOutput" style="white-space: pre-wrap; margin-top:20px;"></div>
+    </div>
+
+    <script>
+        let workbook = null;
+        let data = null;
+        let headers = null;
+        let genes = null;
+        let selectedGroups = { group1: [], group2: [] };
+        let selectedGene = null;
+
+        // =========== (1) Existing T-Test Code =========== //
+
+        // File Upload Handler
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                workbook = XLSX.read(data, {type: 'array'});
+                processExcelData();
+                document.getElementById('step2').classList.remove('hidden');
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function processExcelData() {
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(sheet, {header: 1});
+            
+            headers = jsonData[0].slice(1);
+            genes = jsonData.slice(1).map(row => row[0]);
+            data = {};
+            
+            jsonData.slice(1).forEach(row => {
+                data[row[0]] = row.slice(1).map(Number);
+            });
+
+            // Populate column selection lists
+            const group1List = document.getElementById('group1List');
+            const group2List = document.getElementById('group2List');
+            
+            headers.forEach((header, index) => {
+                const item1 = createColumnItem(header, index, 'group1');
+                const item2 = createColumnItem(header, index, 'group2');
+                group1List.appendChild(item1);
+                group2List.appendChild(item2);
+            });
+        }
+
+        function createColumnItem(header, index, group) {
+            const div = document.createElement('div');
+            div.className = 'column-item';
+            div.textContent = header;
+            div.onclick = () => toggleSelection(div, header, group);
+            return div;
+        }
+
+        function toggleSelection(element, header, group) {
+            element.classList.toggle('selected');
+            if (element.classList.contains('selected')) {
+                selectedGroups[group].push(header);
+            } else {
+                selectedGroups[group] = selectedGroups[group].filter(h => h !== header);
+            }
+        }
+
+        function confirmGroups() {
+            if (selectedGroups.group1.length === 0 || selectedGroups.group2.length === 0) {
+                alert('Please select at least one column for each group');
+                return;
+            }
+            document.getElementById('step3').classList.remove('hidden');
+            
+            // Clear previous search results
+            const geneList = document.getElementById('geneList');
+            geneList.innerHTML = '';
+        }
+
+        // Gene search functionality with debouncing
+        let searchTimeout = null;
+        document.getElementById('geneSearch').addEventListener('input', function(e) {
+            const searchTerm = e.target.value.toLowerCase();
+            
+            // Clear previous timeout
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+            }
+            
+            // Set new timeout to avoid too many updates
+            searchTimeout = setTimeout(() => {
+                const geneList = document.getElementById('geneList');
+                geneList.innerHTML = ''; // Clear previous results
+                
+                // Only show genes that match the search term
+                if (searchTerm.length >= 2) { // Only search if at least 2 characters entered
+                    const matchingGenes = genes.filter(gene => 
+                        gene.toLowerCase().includes(searchTerm)
+                    ).slice(0, 10); // Limit to first 10 matches
+                    
+                    matchingGenes.forEach(gene => {
+                        const div = document.createElement('div');
+                        div.className = 'column-item';
+                        div.textContent = gene;
+                        div.onclick = () => selectGene(div, gene);
+                        geneList.appendChild(div);
+                    });
+                    
+                    if (matchingGenes.length === 0) {
+                        const noResults = document.createElement('div');
+                        noResults.textContent = 'No matching genes found';
+                        noResults.style.padding = '10px';
+                        geneList.appendChild(noResults);
+                    }
+                }
+            }, 300); // 300ms delay for debouncing
+        });
+
+        function selectGene(element, gene) {
+            // Clear previous selection
+            Array.from(document.getElementById('geneList').children)
+                .forEach(item => item.classList.remove('selected'));
+            element.classList.add('selected');
+            selectedGene = gene;
+            
+            // Clear the search input and results after selection
+            document.getElementById('geneSearch').value = '';
+            document.getElementById('geneList').innerHTML = '';
+            
+            // Show the selected gene
+            const selectedGeneDiv = document.createElement('div');
+            selectedGeneDiv.className = 'column-item selected';
+            selectedGeneDiv.textContent = gene;
+            document.getElementById('geneList').appendChild(selectedGeneDiv);
+        }
+
+        function confirmGene() {
+            if (!selectedGene) {
+                alert('Please select a gene');
+                return;
+            }
+            document.getElementById('step4').classList.remove('hidden');
+        }
+
+        function calculateMean(arr) {
+            return arr.reduce((a, b) => a + b) / arr.length;
+        }
+
+        function calculateVariance(arr, mean) {
+            return arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (arr.length - 1);
+        }
+
+        function performTTest() {
+            const testType = document.getElementById('testType').value;
+            
+            const group1Data = selectedGroups.group1.map(header => data[selectedGene][headers.indexOf(header)]);
+            const group2Data = selectedGroups.group2.map(header => data[selectedGene][headers.indexOf(header)]);
+
+            const mean1 = calculateMean(group1Data);
+            const mean2 = calculateMean(group2Data);
+            
+            let tStat, df, pValue;
+
+            // Paired test if same length arrays
+            if (testType === 'paired' && group1Data.length === group2Data.length) {
+                const differences = group1Data.map((val, i) => val - group2Data[i]);
+                const meanDiff = calculateMean(differences);
+                const varDiff = calculateVariance(differences, meanDiff);
+                tStat = meanDiff / Math.sqrt(varDiff / differences.length);
+                df = differences.length - 1;
+            } else {
+                // Unpaired test
+                const var1 = calculateVariance(group1Data, mean1);
+                const var2 = calculateVariance(group2Data, mean2);
+                tStat = (mean1 - mean2) / Math.sqrt((var1 / group1Data.length) + (var2 / group2Data.length));
+                df = group1Data.length + group2Data.length - 2;
+            }
+
+            pValue = 2 * (1 - tcdf(Math.abs(tStat), df));
+
+            // Display results
+            document.getElementById('results').classList.remove('hidden');
+            document.getElementById('resultContent').innerHTML = `
+                <p><strong>Gene:</strong> ${selectedGene}</p>
+                <p><strong>Test Type:</strong> ${testType === 'paired' ? 'Paired' : 'Unpaired'} t-test</p>
+                <p><strong>Group 1 Mean:</strong> ${mean1.toFixed(4)}</p>
+                <p><strong>Group 2 Mean:</strong> ${mean2.toFixed(4)}</p>
+                <p><strong>t-statistic:</strong> ${tStat.toFixed(4)}</p>
+                <p><strong>Degrees of freedom:</strong> ${df}</p>
+                <p><strong>p-value:</strong> ${pValue.toFixed(4)}</p>
+                <p><strong>Interpretation:</strong> ${
+                  pValue < 0.05 
+                    ? 'There is a statistically significant difference between the groups (p < 0.05)' 
+                    : 'There is no statistically significant difference between the groups (p ≥ 0.05)'
+                }</p>
+            `;
+        }
+
+        // T-distribution CDF approximation (for demonstration only; not super precise)
+        function tcdf(t, df) {
+            const x = df / (df + t * t);
+            let result = 1;
+            for (let i = df - 2; i >= 1; i -= 2) {
+                result = 1 + (i * result) / (2 * x);
+            }
+            if (df % 2 === 0) {
+                result = Math.sqrt(x) * result;
+            } else {
+                result = Math.sqrt(x * Math.PI) * result / 2;
+            }
+            return 1 - 0.5 * (1 - result);
+        }
+
+        // =========== (2) Add the Groq API Call as a "fetch" =========== //
+
+        function callGroqAPI() {
+          // Replace this with your actual key; caution about exposing secrets in client-side code
+          const apiKey = "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";
+
+          fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: "llama-3.3-70b-versatile",
+              messages: [
+                {
+                  role: "user",
+                  content: "Explain the importance of fast language models",
+                },
+              ],
+            }),
+          })
+            .then((response) => response.json())
+            .then((data) => {
+              console.log("Groq API response:", data);
+              // Display response in the page (optional)
+              const outputDiv = document.getElementById("groqOutput");
+              outputDiv.textContent = JSON.stringify(data, null, 2);
+            })
+            .catch((error) => {
+              console.error("Error calling Groq API:", error);
+              alert("Error calling Groq API. See console for details.");
+            });
+        }
+    </script>
+</body>
+</html>
